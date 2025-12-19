@@ -321,9 +321,21 @@
     flex-wrap: wrap;
 }
 
+@media (max-width: 640px) {
+    .controls {
+        flex-direction: column;
+    }
+    
+    .button {
+        width: 100%;
+        min-width: unset;
+    }
+}
+
 .button {
     flex: 1;
     min-width: 140px;
+    min-height: 44px;
     padding: 12px 24px;
     border-radius: 10px;
     border: none;
@@ -342,6 +354,11 @@
 .button:disabled {
     opacity: 0.4;
     cursor: not-allowed;
+}
+
+.button:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
 }
 
 .button::before {

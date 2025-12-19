@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import './Dashboard.css';
 import MapView from './MapView';
 import { FaVideo, FaChartLine, FaMap, FaInfoCircle, FaMapMarkerAlt, FaRuler, FaClock, FaPlay, FaStop, FaSync, FaExclamationTriangle, FaCamera } from 'react-icons/fa';
@@ -38,6 +38,10 @@ function Dashboard() {
     trailLength: 0,           // Total trail length in km
     lastUpdate: null          // Timestamp of last data update
   });
+  
+  // UI state
+  const [isLoading, setIsLoading] = useState(false);     // Loading indicator
+  const [error, setError] = useState(null);              // Error message
 
   // ========== EFFECTS ==========
   
@@ -47,22 +51,38 @@ function Dashboard() {
    * Runs every 10 seconds to monitor connection status
    */
   useEffect(() => {
+    const abortController = new AbortController();
+    
     const checkBackend = async () => {
       try {
-        const response = await fetch(`${API_BASE}/`);
+        const response = await fetch(`${API_BASE}/`, {
+          signal: abortController.signal,
+          headers: { 'Accept': 'application/json' }
+        });
+        
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
         const data = await response.json();
         if (data.status === 'SkyWeave backend running') {
           setBackendStatus('online');
+          setError(null); // Clear any previous errors
         }
       } catch (error) {
-        console.error('Backend check failed:', error);
-        setBackendStatus('offline');
+        if (error.name !== 'AbortError') {
+          console.error('Backend check failed:', error);
+          setBackendStatus('offline');
+        }
       }
     };
 
     checkBackend();                                    // Initial check
     const interval = setInterval(checkBackend, 10000); // Check every 10 seconds
-    return () => clearInterval(interval);              // Cleanup on unmount
+    return () => {
+      clearInterval(interval);
+      abortController.abort(); // Cancel pending requests
+    };
   }, []);
 
   /**
@@ -72,31 +92,60 @@ function Dashboard() {
    */
   useEffect(() => {
     if (!isStreaming) return; // Only poll when streaming is active
+    
+    const abortController = new AbortController();
 
     const pollTrailData = async () => {
       try {
-        const response = await fetch(`${API_BASE}/trail/geojson`);
+        const response = await fetch(`${API_BASE}/trail/geojson`, {
+          signal: abortController.signal,
+          headers: { 'Accept': 'application/json' }
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Failed to fetch trail data: ${response.status}`);
+        }
+        
         const data = await response.json();
         
-        if (data.geometry && data.geometry.coordinates) {
+        // Validate coordinate data
+        if (data.geometry && Array.isArray(data.geometry.coordinates)) {
           const coords = data.geometry.coordinates;
-          setTrailCoordinates(coords);
+          
+          // Validate each coordinate pair
+          const validCoords = coords.filter(coord => 
+            Array.isArray(coord) && 
+            coord.length === 2 && 
+            typeof coord[0] === 'number' && 
+            typeof coord[1] === 'number' &&
+            !isNaN(coord[0]) && !isNaN(coord[1])
+          );
+          
+          setTrailCoordinates(validCoords);
           
           // Update statistics with new trail data
           setStats({
-            pointsDetected: coords.length,
-            trailLength: calculateTrailLength(coords),
+            pointsDetected: validCoords.length,
+            trailLength: calculateTrailLength(validCoords),
             lastUpdate: new Date().toLocaleTimeString()
           });
+          
+          setError(null); // Clear any previous errors
         }
       } catch (error) {
-        console.error('Failed to fetch trail data:', error);
+        if (error.name !== 'AbortError') {
+          console.error('Failed to fetch trail data:', error);
+          setError('Unable to fetch trail data. Please check your connection.');
+        }
       }
     };
 
     pollTrailData();                                   // Initial fetch
-    const interval = setInterval(pollTrailData, 1000); // Poll every 1 second
-    return () => clearInterval(interval);              // Cleanup on unmount or when streaming stops
+    const interval = setInterval(pollTrailData, 2000); // Poll every 2 seconds (optimized)
+    return () => {
+      clearInterval(interval);
+      abortController.abort(); // Cancel pending requests
+    };
   }, [isStreaming]);
 
   // ========== UTILITY FUNCTIONS ==========
@@ -143,41 +192,99 @@ function Dashboard() {
    * Handle Start Stream
    * Initiates the video stream and resets all trail data
    */
-  const handleStartStream = () => {
+  const handleStartStream = useCallback(() => {
+    if (backendStatus !== 'online') return;
+    
+    setIsLoading(true);
+    setError(null);
     setIsStreaming(true);             // Enable streaming
     setTrailCoordinates([]);          // Clear previous trail data
     setStats({ pointsDetected: 0, trailLength: 0, lastUpdate: null }); // Reset statistics
-  };
+    
+    // Clear loading state after a short delay
+    setTimeout(() => setIsLoading(false), 1000);
+  }, [backendStatus]);
 
   /**
    * Handle Stop Stream
    * Stops the video stream (trail data remains visible)
    */
-  const handleStopStream = () => {
+  const handleStopStream = useCallback(() => {
     setIsStreaming(false);
-  };
+  }, []);
 
   /**
    * Handle Reset Map
    * Resets the map to default location and clears all trail data
    * Sends request to backend to reset base location
    */
-  const handleResetMap = async () => {
+  const handleResetMap = useCallback(async () => {
+    if (backendStatus !== 'online') return;
+    
+    // Confirm if there's data to lose
+    if (trailCoordinates.length > 0) {
+      const confirmed = window.confirm(
+        `Reset map and clear ${trailCoordinates.length} trail points?`
+      );
+      if (!confirmed) return;
+    }
+    
+    setIsLoading(true);
+    setError(null);
+    
     try {
       // Reset backend to default Langtang Valley coordinates
-      await fetch(`${API_BASE}/set_base_location`, {
+      const response = await fetch(`${API_BASE}/set_base_location`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
         body: JSON.stringify({ lat: 28.2134, lon: 85.4293 })
       });
+      
+      if (!response.ok) {
+        throw new Error('Failed to reset map on backend');
+      }
       
       // Clear frontend trail data and statistics
       setTrailCoordinates([]);
       setStats({ pointsDetected: 0, trailLength: 0, lastUpdate: null });
     } catch (error) {
       console.error('Failed to reset:', error);
+      setError('Failed to reset map. Please try again.');
+    } finally {
+      setIsLoading(false);
     }
-  };
+  }, [backendStatus, trailCoordinates.length]);
+
+  // ========== KEYBOARD SHORTCUTS ==========
+  
+  /**
+   * Effect: Keyboard Shortcuts
+   * Space: Toggle stream, Ctrl+R: Reset map
+   */
+  useEffect(() => {
+    const handleKeyPress = (e) => {
+      // Ignore if user is typing in an input
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+      
+      if (e.code === 'Space' && backendStatus === 'online') {
+        e.preventDefault();
+        if (isStreaming) {
+          handleStopStream();
+        } else {
+          handleStartStream();
+        }
+      } else if (e.key === 'r' && e.ctrlKey && backendStatus === 'online') {
+        e.preventDefault();
+        handleResetMap();
+      }
+    };
+    
+    window.addEventListener('keydown', handleKeyPress);
+    return () => window.removeEventListener('keydown', handleKeyPress);
+  }, [isStreaming, backendStatus, handleStartStream, handleStopStream, handleResetMap]);
 
   // ========== RENDER ==========
   
@@ -227,8 +334,9 @@ function Dashboard() {
                 /* Video stream from backend */
                 <img 
                   src={`${API_BASE}/stream`} 
-                  alt="Drone stream" 
+                  alt="Live drone video stream showing trail detection" 
                   className="video-stream"
+                  loading="lazy"
                 />
               ) : (
                 /* Placeholder when not streaming */
@@ -247,16 +355,19 @@ function Dashboard() {
                 <button 
                   className="button button-primary" 
                   onClick={handleStartStream}
-                  disabled={backendStatus !== 'online'}
-                  title="Start video stream and trail detection"
+                  disabled={backendStatus !== 'online' || isLoading}
+                  title="Start video stream and trail detection (Space)"
+                  aria-label="Start trail detection"
                 >
-                  <span><FaPlay /> Start Detection</span>
+                  <span><FaPlay /> {isLoading ? 'Starting...' : 'Start Detection'}</span>
                 </button>
               ) : (
                 <button 
                   className="button button-danger" 
                   onClick={handleStopStream}
-                  title="Stop video stream"
+                  disabled={isLoading}
+                  title="Stop video stream (Space)"
+                  aria-label="Stop video stream"
                 >
                   <span><FaStop /> Stop Stream</span>
                 </button>
@@ -266,21 +377,33 @@ function Dashboard() {
               <button 
                 className="button button-secondary" 
                 onClick={handleResetMap}
-                disabled={backendStatus !== 'online'}
-                title="Reset map and clear trail data"
+                disabled={backendStatus !== 'online' || isLoading}
+                title="Reset map and clear trail data (Ctrl+R)"
+                aria-label="Reset map and clear trail data"
               >
-                <span><FaSync /> Reset Map</span>
+                <span><FaSync /> {isLoading ? 'Resetting...' : 'Reset Map'}</span>
               </button>
             </div>
 
-            {/* Error Message (shown when backend is offline) */}
+            {/* Error Messages */}
             {backendStatus === 'offline' && (
-              <div className="error-message">
+              <div className="error-message" role="alert">
                 <span className="error-icon"><FaExclamationTriangle /></span>
                 <div>
                   <strong>Backend Offline</strong>
                   <br />
                   Make sure the Flask server is running on port 5000
+                </div>
+              </div>
+            )}
+            
+            {error && backendStatus === 'online' && (
+              <div className="error-message" role="alert">
+                <span className="error-icon"><FaExclamationTriangle /></span>
+                <div>
+                  <strong>Error</strong>
+                  <br />
+                  {error}
                 </div>
               </div>
             )}
