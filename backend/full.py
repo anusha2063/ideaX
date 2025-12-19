@@ -42,14 +42,22 @@ def pixel_to_geo(px, py, w, h, lat, lon, meters_per_pixel=0.2):
 def detect_and_stream():
     global frame_index, trail_geo_points
 
-    cap = cv2.VideoCapture("video.webm")
+    cap = cv2.VideoCapture("video.mp4")
+    
+    if not cap.isOpened():
+        print("ERROR: Could not open video file video.mp4")
+        return
+    
+    print(f"Video opened successfully. FPS: {cap.get(cv2.CAP_PROP_FPS)}")
     fps = cap.get(cv2.CAP_PROP_FPS)
     delay = 1 / fps if fps > 0 else 0.03
 
     while True:
         success, frame = cap.read()
         if not success:
-            break
+            print("End of video, restarting...")
+            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)  # Loop video
+            continue
 
         frame_index += 1
         gps_lat, gps_lon = simulate_gps(frame_index)

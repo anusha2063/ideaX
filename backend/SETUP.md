@@ -4,7 +4,7 @@
 
 Make sure you have the following files in `backend/flask_api_skyweave/`:
 - `best.pt` - Your trained YOLO model
-- `video.webm` - Test video for trail detection
+- `video.mp4` - Test video for trail detection
 
 ## Installation
 
@@ -47,7 +47,7 @@ The frontend (`DroneImageryFeed` component) will:
 
 **Backend offline error:**
 - Make sure Flask server is running on port 5000
-- Check that `video.webm` and `best.pt` exist in the backend folder
+- Check that `video.mp4` and `best.pt` exist in the backend folder
 
 **No trail coordinates:**
 - Verify the YOLO model is detecting trails in the video
