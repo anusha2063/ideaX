@@ -104,7 +104,7 @@ function App() {
         <div className="footer-container">
           <div className="footer-content">
             {/* Brand Section */}
-            <div className="footer-section">
+            <div className="footer-section footer-brand-section">
               <div className="footer-brand">
                 <FaHelicopter className="footer-brand-icon" />
                 <h3 className="footer-brand-name">SkyWeave</h3>
@@ -116,35 +116,13 @@ function App() {
             </div>
 
             {/* Features */}
-            <div className="footer-section">
+            <div className="footer-section footer-features-section">
               <h4 className="footer-heading">Features</h4>
               <ul className="footer-links">
                 <li><FaRobot className="footer-icon" /> Real-time AI Detection</li>
                 <li><FaMapMarkerAlt className="footer-icon" /> GPS Trail Mapping</li>
                 <li><FaVideo className="footer-icon" /> Live Video Stream</li>
                 <li><FaChartLine className="footer-icon" /> Analytics Dashboard</li>
-              </ul>
-            </div>
-
-            {/* Technology */}
-            <div className="footer-section">
-              <h4 className="footer-heading">Technology</h4>
-              <ul className="footer-links">
-                <li>YOLO v8 AI Model</li>
-                <li>React Frontend</li>
-                <li>Flask Backend</li>
-                <li>Leaflet Maps</li>
-              </ul>
-            </div>
-
-            {/* Links */}
-            <div className="footer-section">
-              <h4 className="footer-heading">Resources</h4>
-              <ul className="footer-links">
-                <li><a href="#docs">Documentation</a></li>
-                <li><a href="#github">GitHub</a></li>
-                <li><a href="#api">API Reference</a></li>
-                <li><a href="#support">Support</a></li>
               </ul>
             </div>
           </div>
