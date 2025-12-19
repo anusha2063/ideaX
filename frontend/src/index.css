@@ -1,7 +1,8 @@
 @import url('https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700;800&family=Fira+Code:wght@400;500&display=swap');
+@import './theme-adjustments.css';
 
 :root {
-  /* Unique Color Palette - Nature-Tech Fusion */
+  /* Unique Color Palette - Nature-Tech Fusion (same for both themes) */
   --color-primary: hsl(160, 45%, 45%);        /* Deep Teal */
   --color-primary-dark: hsl(160, 50%, 35%);   /* Darker Teal */
   --color-primary-light: hsl(160, 45%, 55%);  /* Lighter Teal */
@@ -11,24 +12,23 @@
   --color-warning: hsl(35, 92%, 58%);         /* Burnt Orange */
   --color-danger: hsl(12, 75%, 58%);          /* Coral Red */
   
-  /* Warm Dark Theme Backgrounds */
+  /* Dark Theme (Default) */
   --bg-primary: hsl(220, 15%, 12%);
   --bg-secondary: hsl(25, 20%, 15%);
   --bg-tertiary: hsl(30, 18%, 18%);
   --bg-card: rgba(30, 28, 26, 0.75);
   --bg-elevated: rgba(42, 38, 35, 0.85);
-  
-  /* Text Colors */
   --text-primary: hsl(0, 0%, 98%);
   --text-secondary: hsl(0, 0%, 75%);
   --text-tertiary: hsl(0, 0%, 55%);
-  
-  /* Borders & Shadows */
   --border-color: hsl(220, 20%, 25%);
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
   --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.4);
   --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.5);
-  --shadow-glow: 0 0 30px rgba(33, 150, 243, 0.3);
+  --shadow-glow: 0 0 30px rgba(52, 120, 100, 0.3);
+  --radial-teal: rgba(52, 120, 100, 0.12);
+  --radial-rust: rgba(210, 105, 60, 0.1);
+  --radial-amber: rgba(220, 170, 70, 0.03);
   
   /* Spacing */
   --spacing-xs: 0.5rem;
@@ -49,6 +49,26 @@
   --transition-slow: 400ms ease-in-out;
 }
 
+/* Light Theme Override */
+body[data-theme="light"] {
+  --bg-primary: hsl(35, 45%, 98%);
+  --bg-secondary: hsl(30, 40%, 96%);
+  --bg-tertiary: hsl(25, 35%, 94%);
+  --bg-card: rgba(255, 255, 255, 0.95);
+  --bg-elevated: rgba(255, 255, 255, 0.98);
+  --text-primary: hsl(220, 25%, 10%);
+  --text-secondary: hsl(220, 20%, 25%);
+  --text-tertiary: hsl(220, 15%, 45%);
+  --border-color: hsl(30, 25%, 85%);
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.08);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.12);
+  --shadow-glow: 0 0 30px rgba(52, 120, 100, 0.25);
+  --radial-teal: rgba(52, 120, 100, 0.05);
+  --radial-rust: rgba(210, 105, 60, 0.04);
+  --radial-amber: rgba(220, 170, 70, 0.03);
+}
+
 * {
   margin: 0;
   padding: 0;
@@ -61,15 +81,16 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   background: 
-    radial-gradient(ellipse at top left, rgba(52, 120, 100, 0.12) 0%, transparent 40%),
-    radial-gradient(ellipse at bottom right, rgba(210, 105, 60, 0.1) 0%, transparent 40%),
-    radial-gradient(circle at center, rgba(220, 170, 70, 0.03) 0%, transparent 70%),
+    radial-gradient(ellipse at top left, var(--radial-teal) 0%, transparent 40%),
+    radial-gradient(ellipse at bottom right, var(--radial-rust) 0%, transparent 40%),
+    radial-gradient(circle at center, var(--radial-amber) 0%, transparent 70%),
     linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-secondary) 100%);
   background-attachment: fixed;
   color: var(--text-primary);
   min-height: 100vh;
   overflow-x: hidden;
   position: relative;
+  transition: background 0.3s ease, color 0.3s ease;
 }
 
 body::before {
@@ -86,6 +107,14 @@ body::before {
   opacity: 0.4;
   pointer-events: none;
   z-index: 0;
+}
+
+body[data-theme="light"]::before {
+  background-image: 
+    radial-gradient(circle at 20% 50%, rgba(52, 120, 100, 0.04) 0%, transparent 50%),
+    radial-gradient(circle at 80% 80%, rgba(210, 105, 60, 0.04) 0%, transparent 50%),
+    url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 0h60v60H0z' fill='none'/%3E%3Cpath d='M30 30m-2 0a2 2 0 1 0 4 0a2 2 0 1 0 -4 0' fill='rgba(52,120,100,0.06)'/%3E%3C/svg%3E");
+  opacity: 0.5;
 }
 
 body::after {

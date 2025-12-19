@@ -42,7 +42,7 @@ const Home = () => {
                     <h1 className="hero-main-title">
                         Discover & Map Trails
                         <br />
-                        <span className="gradient-text">From The Sky</span>
+                        <span className="gradient-text" data-text="From The Sky">From The Sky</span>
                     </h1>
                     
                     <p className="hero-description">

@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route, useNavigate, useLocation } from
 import './App.css';
 import Home from './components/Home';
 import Dashboard from './components/Dashboard';
+import ThemeToggle from './components/ThemeToggle';
 import { FaHelicopter, FaCircle, FaHeart, FaCode, FaGithub, FaHome, FaChartLine, FaRobot, FaMapMarkerAlt, FaVideo } from 'react-icons/fa';
 
 const API_BASE = 'http://localhost:5000';
@@ -63,6 +64,11 @@ function Navbar() {
             <FaChartLine />
             <span>Dashboard</span>
           </button>
+        </div>
+
+        {/* Theme Toggle */}
+        <div className="navbar-theme">
+          <ThemeToggle />
         </div>
 
         {/* Status */}
@@ -146,16 +152,8 @@ function App() {
           {/* Footer Bottom */}
           <div className="footer-bottom">
             <p className="footer-copyright">
-              © 2025 SkyWeave. Built with <FaHeart className="footer-heart" /> for innovation.
+              © 2025 SkyWeave. Built with purpose|| for innovation.
             </p>
-            <div className="footer-social">
-              <a href="#github" className="footer-social-link">
-                <FaGithub />
-              </a>
-              <a href="#code" className="footer-social-link">
-                <FaCode />
-              </a>
-            </div>
           </div>
         </div>
       </footer>
