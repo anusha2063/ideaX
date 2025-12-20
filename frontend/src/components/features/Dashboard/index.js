@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import './Dashboard.css';
 import MapView from '../MapView';
-import { FaVideo, FaChartLine, FaMap, FaInfoCircle, FaMapMarkerAlt, FaRuler, FaClock, FaPlay, FaStop, FaSync, FaExclamationTriangle, FaCamera } from 'react-icons/fa';
+import { FaVideo, FaChartLine, FaMap, FaInfoCircle, FaMapMarkerAlt, FaRuler, FaClock, FaPlay, FaStop, FaSync, FaExclamationTriangle, FaCamera, FaTachometerAlt, FaExpand, FaHourglassHalf } from 'react-icons/fa';
 
 /**
  * API Configuration (Kept for backward compatibility)
@@ -36,8 +36,14 @@ function Dashboard() {
   const [stats, setStats] = useState({
     pointsDetected: 0,        // Number of trail points detected
     trailLength: 0,           // Total trail length in km
-    lastUpdate: null          // Timestamp of last data update
+    lastUpdate: null,         // Timestamp of last data update
+    avgSpeed: 0,              // Average speed in km/h
+    areaCovered: 0,           // Approximate area covered in km²
+    streamDuration: 0         // Streaming duration in seconds
   });
+  
+  // Stream start time for duration calculation
+  const [streamStartTime, setStreamStartTime] = useState(null);
   
   // UI state
   const [isLoading, setIsLoading] = useState(false);     // Loading indicator
@@ -123,11 +129,18 @@ function Dashboard() {
           
           setTrailCoordinates(validCoords);
           
+          // Calculate duration if streaming
+          const duration = streamStartTime ? Math.floor((Date.now() - streamStartTime) / 1000) : 0;
+          const trailLength = calculateTrailLength(validCoords);
+          
           // Update statistics with new trail data
           setStats({
             pointsDetected: validCoords.length,
-            trailLength: calculateTrailLength(validCoords),
-            lastUpdate: new Date().toLocaleTimeString()
+            trailLength: trailLength,
+            lastUpdate: new Date().toLocaleTimeString(),
+            avgSpeed: duration > 0 ? ((trailLength / duration) * 3600).toFixed(1) : 0,
+            areaCovered: calculateAreaCovered(validCoords),
+            streamDuration: duration
           });
           
           setError(null); // Clear any previous errors
@@ -186,6 +199,74 @@ function Dashboard() {
     return (totalDistance / 1000).toFixed(2); // Convert meters to km
   };
 
+  /**
+   * Calculate Area Covered
+   * Approximates the area covered by the trail using a bounding box approach
+   * 
+   * @param {Array} coords - Array of [longitude, latitude] coordinate pairs
+   * @returns {string} Approximate area in km² (2 decimal places)
+   */
+  const calculateAreaCovered = (coords) => {
+    if (coords.length < 3) return 0; // Need at least 3 points for an area
+    
+    // Find bounding box
+    const lons = coords.map(c => c[0]);
+    const lats = coords.map(c => c[1]);
+    const minLon = Math.min(...lons);
+    const maxLon = Math.max(...lons);
+    const minLat = Math.min(...lats);
+    const maxLat = Math.max(...lats);
+    
+    // Calculate width and height in km
+    const width = calculateDistance([minLon, minLat], [maxLon, minLat]);
+    const height = calculateDistance([minLon, minLat], [minLon, maxLat]);
+    
+    // Approximate area (this is a simplification)
+    const area = (width * height) / 1000000; // Convert m² to km²
+    
+    return area.toFixed(3);
+  };
+
+  /**
+   * Calculate Distance Between Two Points
+   * Helper function using Haversine formula
+   * 
+   * @param {Array} coord1 - [longitude, latitude]
+   * @param {Array} coord2 - [longitude, latitude]
+   * @returns {number} Distance in meters
+   */
+  const calculateDistance = (coord1, coord2) => {
+    const [lon1, lat1] = coord1;
+    const [lon2, lat2] = coord2;
+    
+    const R = 6371e3;
+    const φ1 = lat1 * Math.PI / 180;
+    const φ2 = lat2 * Math.PI / 180;
+    const Δφ = (lat2 - lat1) * Math.PI / 180;
+    const Δλ = (lon2 - lon1) * Math.PI / 180;
+    
+    const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+              Math.cos(φ1) * Math.cos(φ2) *
+              Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    
+    return R * c;
+  };
+
+  /**
+   * Format Duration
+   * Converts seconds to HH:MM:SS format
+   * 
+   * @param {number} seconds - Duration in seconds
+   * @returns {string} Formatted duration string
+   */
+  const formatDuration = (seconds) => {
+    const hrs = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    const secs = seconds % 60;
+    return `${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
   // ========== EVENT HANDLERS ==========
   
   /**
@@ -198,8 +279,9 @@ function Dashboard() {
     setIsLoading(true);
     setError(null);
     setIsStreaming(true);             // Enable streaming
+    setStreamStartTime(Date.now());   // Record start time
     setTrailCoordinates([]);          // Clear previous trail data
-    setStats({ pointsDetected: 0, trailLength: 0, lastUpdate: null }); // Reset statistics
+    setStats({ pointsDetected: 0, trailLength: 0, lastUpdate: null, avgSpeed: 0, areaCovered: 0, streamDuration: 0 }); // Reset statistics
     
     // Clear loading state after a short delay
     setTimeout(() => setIsLoading(false), 1000);
@@ -211,6 +293,7 @@ function Dashboard() {
    */
   const handleStopStream = useCallback(() => {
     setIsStreaming(false);
+    setStreamStartTime(null);
   }, []);
 
   /**
@@ -249,7 +332,8 @@ function Dashboard() {
       
       // Clear frontend trail data and statistics
       setTrailCoordinates([]);
-      setStats({ pointsDetected: 0, trailLength: 0, lastUpdate: null });
+      setStreamStartTime(null);
+      setStats({ pointsDetected: 0, trailLength: 0, lastUpdate: null, avgSpeed: 0, areaCovered: 0, streamDuration: 0 });
     } catch (error) {
       console.error('Failed to reset:', error);
       setError('Failed to reset map. Please try again.');
@@ -311,10 +395,10 @@ function Dashboard() {
 
       {/* ==================== MAIN CONTENT ==================== */}
       <div className="dashboard-grid">
-        {/* ========== LEFT COLUMN: Video & Stats ========== */}
-        <section className="dashboard-section">
+        {/* ========== TOP ROW: Video & Map ========== */}
+        <section className="dashboard-section dashboard-top-row">
           {/* Video Feed Card */}
-          <div className="dashboard-card">
+          <div className="dashboard-card dashboard-video-card">
             <div className="card-header">
               <h2 className="card-title">
                 <span className="card-icon"><FaVideo /></span>
@@ -409,8 +493,31 @@ function Dashboard() {
             )}
           </div>
 
+          {/* Map Card */}
+          <div className="dashboard-card dashboard-map-card">
+            <div className="card-header">
+              <h2 className="card-title">
+                <span className="card-icon"><FaMap /></span>
+                Trail Map
+              </h2>
+              {/* Updating indicator (shown when streaming) */}
+              {isStreaming && (
+                <div className="updating-badge">
+                  <span className="updating-dot">●</span>
+                  Updating
+                </div>
+              )}
+            </div>
+
+            {/* Interactive Map Component */}
+            <MapView coordinates={trailCoordinates} />
+          </div>
+        </section>
+
+        {/* ========== BOTTOM ROW: Statistics ========== */}
+        <section className="dashboard-section dashboard-stats-row">
           {/* Statistics Card */}
-          <div className="dashboard-card">
+          <div className="dashboard-card dashboard-stats-card">
             <div className="card-header">
               <h2 className="card-title">
                 <span className="card-icon"><FaChartLine /></span>
@@ -436,6 +543,32 @@ function Dashboard() {
               </div>
               
               <div className="stat-card">
+                <div className="stat-icon"><FaTachometerAlt /></div>
+                <div className="stat-content">
+                  <div className="stat-label">Avg Speed</div>
+                  <div className="stat-value">{stats.avgSpeed} <span className="stat-unit">km/h</span></div>
+                </div>
+              </div>
+
+              <div className="stat-card">
+                <div className="stat-icon"><FaExpand /></div>
+                <div className="stat-content">
+                  <div className="stat-label">Area Covered</div>
+                  <div className="stat-value">{stats.areaCovered} <span className="stat-unit">km²</span></div>
+                </div>
+              </div>
+
+              <div className="stat-card">
+                <div className="stat-icon"><FaHourglassHalf /></div>
+                <div className="stat-content">
+                  <div className="stat-label">Duration</div>
+                  <div className="stat-value stat-time">
+                    {formatDuration(stats.streamDuration)}
+                  </div>
+                </div>
+              </div>
+              
+              <div className="stat-card">
                 <div className="stat-icon"><FaClock /></div>
                 <div className="stat-content">
                   <div className="stat-label">Last Update</div>
@@ -445,43 +578,6 @@ function Dashboard() {
                 </div>
               </div>
             </div>
-          </div>
-        </section>
-
-        {/* ========== RIGHT COLUMN: Map & Info ========== */}
-        <section className="dashboard-section">
-          {/* Map Card */}
-          <div className="dashboard-card">
-            <div className="card-header">
-              <h2 className="card-title">
-                <span className="card-icon"><FaMap /></span>
-                Trail Map
-              </h2>
-              {/* Updating indicator (shown when streaming) */}
-              {isStreaming && (
-                <div className="updating-badge">
-                  <span className="updating-dot">●</span>
-                  Updating
-                </div>
-              )}
-            </div>
-
-            {/* Interactive Map Component */}
-            <MapView coordinates={trailCoordinates} />
-          </div>
-
-          {/* Info Panel */}
-          <div className="info-panel">
-            <h3 className="info-title">
-              <span className="info-icon"><FaInfoCircle /></span>
-              How It Works
-            </h3>
-            <ul className="info-list">
-              <li>YOLO AI detects hiking trails in real-time drone footage</li>
-              <li>GPS coordinates are mapped for each detected trail segment</li>
-              <li>Trail data is visualized on an interactive map</li>
-              <li>Perfect for mapping unexplored terrain and hiking routes</li>
-            </ul>
           </div>
         </section>
       </div>
