@@ -4,28 +4,28 @@ from ultralytics import YOLO
 import cv2
 import time
 import math
+import numpy as np
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS for all routes
+CORS(app)
 
 # -------------------- GLOBAL STATE --------------------
-# Langtang Valley, Nepal - Hilly trekking area
-BASE_LAT = 28.2134     # Langtang Valley latitude
-BASE_LON = 85.4293     # Langtang Valley longitude
+# Langtang Valley, Nepal
+BASE_LAT = 28.2134
+BASE_LON = 85.4293
 
-trail_geo_points = []   # stores [lon, lat]
+trail_geo_points = []   # [lon, lat]
 frame_index = 0
 
 # -------------------- LOAD MODEL --------------------
 model = YOLO("best.pt")
 
-
 # -------------------- GPS SIMULATION --------------------
 def simulate_gps(frame_idx):
-    lat = BASE_LAT + frame_idx * 0.000002
-    lon = BASE_LON + frame_idx * 0.000002
+    # VERY slow movement (realistic)
+    lat = BASE_LAT + frame_idx * 0.0000002
+    lon = BASE_LON + frame_idx * 0.0000002
     return lat, lon
-
 
 # -------------------- PIXEL → GEO --------------------
 def pixel_to_geo(px, py, w, h, lat, lon, meters_per_pixel=0.2):
@@ -37,26 +37,23 @@ def pixel_to_geo(px, py, w, h, lat, lon, meters_per_pixel=0.2):
 
     return new_lat, new_lon
 
-
 # -------------------- VIDEO + YOLO PIPELINE --------------------
 def detect_and_stream():
     global frame_index, trail_geo_points
 
     cap = cv2.VideoCapture("video.mp4")
-    
+
     if not cap.isOpened():
-        print("ERROR: Could not open video file video.mp4")
+        print("ERROR: Could not open video.mp4")
         return
-    
-    print(f"Video opened successfully. FPS: {cap.get(cv2.CAP_PROP_FPS)}")
+
     fps = cap.get(cv2.CAP_PROP_FPS)
     delay = 1 / fps if fps > 0 else 0.03
 
     while True:
         success, frame = cap.read()
         if not success:
-            print("End of video, restarting...")
-            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)  # Loop video
+            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
             continue
 
         frame_index += 1
@@ -74,19 +71,28 @@ def detect_and_stream():
                 interpolation=cv2.INTER_NEAREST
             )
 
-            ys, xs = (mask_resized > 0.5).nonzero()
+            ys, xs = np.where(mask_resized > 0.5)
 
-            for x, y in zip(xs[::50], ys[::50]):
+            # ---- USE CENTROID ONLY (KEY FIX) ----
+            if len(xs) > 0:
+                cx = int(xs.mean())
+                cy = int(ys.mean())
+
                 lat, lon = pixel_to_geo(
-                    x, y,
+                    cx, cy,
                     frame.shape[1],
                     frame.shape[0],
                     gps_lat,
                     gps_lon
                 )
+
                 trail_geo_points.append([lon, lat])
 
-            # visual overlay (green trail)
+                # limit trail size (performance)
+                if len(trail_geo_points) > 1000:
+                    trail_geo_points = trail_geo_points[-1000:]
+
+            # ---- GREEN OVERLAY ----
             overlay = frame.copy()
             overlay[mask_resized > 0.5] = (0, 255, 0)
             frame = cv2.addWeighted(frame, 0.7, overlay, 0.3, 0)
@@ -105,13 +111,11 @@ def detect_and_stream():
 
     cap.release()
 
-
 # -------------------- ROUTES --------------------
 
 @app.route("/")
 def home():
     return jsonify({"status": "SkyWeave backend running"})
-
 
 @app.route("/stream")
 def stream():
@@ -120,17 +124,16 @@ def stream():
         mimetype="multipart/x-mixed-replace; boundary=frame"
     )
 
-
 @app.route("/trail/geojson")
 def trail_geojson():
     return jsonify({
         "type": "Feature",
+        "properties": {},
         "geometry": {
             "type": "LineString",
             "coordinates": trail_geo_points
         }
     })
-
 
 @app.route("/set_base_location", methods=["POST"])
 def set_base_location():
@@ -148,7 +151,6 @@ def set_base_location():
         "lat": BASE_LAT,
         "lon": BASE_LON
     })
-
 
 # -------------------- RUN --------------------
 if __name__ == "__main__":
