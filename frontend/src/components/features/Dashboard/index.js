@@ -22,16 +22,19 @@ const API_BASE = 'http://localhost:5000';
  */
 function Dashboard() {
   // ========== STATE MANAGEMENT ==========
-  
+
   // Streaming state
   const [isStreaming, setIsStreaming] = useState(false);           // Whether video stream is active
-  
+
   // Backend connection state
   const [backendStatus, setBackendStatus] = useState('checking');  // 'checking' | 'online' | 'offline'
-  
+
   // Trail data state
   const [trailCoordinates, setTrailCoordinates] = useState([]);    // Array of [lon, lat] coordinates
-  
+
+  // Landslide/Segmentation data state
+  const [landslideData, setLandslideData] = useState(null);
+
   // Statistics state
   const [stats, setStats] = useState({
     pointsDetected: 0,        // Number of trail points detected
@@ -41,16 +44,16 @@ function Dashboard() {
     areaCovered: 0,           // Approximate area covered in km²
     streamDuration: 0         // Streaming duration in seconds
   });
-  
+
   // Stream start time for duration calculation
   const [streamStartTime, setStreamStartTime] = useState(null);
-  
+
   // UI state
   const [isLoading, setIsLoading] = useState(false);     // Loading indicator
   const [error, setError] = useState(null);              // Error message
 
   // ========== EFFECTS ==========
-  
+
   /**
    * Effect: Backend Health Check
    * Periodically checks if the Flask backend is online and responding
@@ -58,18 +61,18 @@ function Dashboard() {
    */
   useEffect(() => {
     const abortController = new AbortController();
-    
+
     const checkBackend = async () => {
       try {
         const response = await fetch(`${API_BASE}/`, {
           signal: abortController.signal,
           headers: { 'Accept': 'application/json' }
         });
-        
+
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`);
         }
-        
+
         const data = await response.json();
         if (data.status === 'SkyWeave backend running') {
           setBackendStatus('online');
@@ -98,41 +101,54 @@ function Dashboard() {
    */
   useEffect(() => {
     if (!isStreaming) return; // Only poll when streaming is active
-    
+
     const abortController = new AbortController();
 
-    const pollTrailData = async () => {
+    const pollData = async () => {
       try {
-        const response = await fetch(`${API_BASE}/trail/geojson`, {
+        // Fetch Trail Line
+        const trailResponse = await fetch(`${API_BASE}/trail/geojson`, {
           signal: abortController.signal,
           headers: { 'Accept': 'application/json' }
         });
-        
-        if (!response.ok) {
-          throw new Error(`Failed to fetch trail data: ${response.status}`);
+
+        // Fetch Landslide/Segmentation Polygon
+        const landslideResponse = await fetch(`${API_BASE}/landslide/geojson`, {
+          signal: abortController.signal,
+          headers: { 'Accept': 'application/json' }
+        });
+
+        if (!trailResponse.ok) {
+          throw new Error(`Failed to fetch trail data: ${trailResponse.status}`);
         }
-        
-        const data = await response.json();
-        
+
+        const trailData = await trailResponse.json();
+        const landslideJson = await landslideResponse.json().catch(() => null);
+
         // Validate coordinate data
-        if (data.geometry && Array.isArray(data.geometry.coordinates)) {
-          const coords = data.geometry.coordinates;
-          
+        if (trailData.geometry && Array.isArray(trailData.geometry.coordinates)) {
+          const coords = trailData.geometry.coordinates;
+
           // Validate each coordinate pair
-          const validCoords = coords.filter(coord => 
-            Array.isArray(coord) && 
-            coord.length === 2 && 
-            typeof coord[0] === 'number' && 
+          const validCoords = coords.filter(coord =>
+            Array.isArray(coord) &&
+            coord.length === 2 &&
+            typeof coord[0] === 'number' &&
             typeof coord[1] === 'number' &&
             !isNaN(coord[0]) && !isNaN(coord[1])
           );
-          
+
           setTrailCoordinates(validCoords);
-          
+
+          // Update Landslide/Segmentation Data if valid
+          if (landslideJson && landslideJson.geometry && landslideJson.geometry.coordinates) {
+            setLandslideData(landslideJson.geometry.coordinates);
+          }
+
           // Calculate duration if streaming
           const duration = streamStartTime ? Math.floor((Date.now() - streamStartTime) / 1000) : 0;
           const trailLength = calculateTrailLength(validCoords);
-          
+
           // Update statistics with new trail data
           setStats({
             pointsDetected: validCoords.length,
@@ -142,27 +158,27 @@ function Dashboard() {
             areaCovered: calculateAreaCovered(validCoords),
             streamDuration: duration
           });
-          
+
           setError(null); // Clear any previous errors
         }
       } catch (error) {
         if (error.name !== 'AbortError') {
-          console.error('Failed to fetch trail data:', error);
-          setError('Unable to fetch trail data. Please check your connection.');
+          console.error('Failed to fetch data:', error);
+          setError('Unable to fetch data. Please check your connection.');
         }
       }
     };
 
-    pollTrailData();                                   // Initial fetch
-    const interval = setInterval(pollTrailData, 2000); // Poll every 2 seconds (optimized)
+    pollData();                                        // Initial fetch
+    const interval = setInterval(pollData, 1000);      // Poll faster for smoother updates
     return () => {
       clearInterval(interval);
       abortController.abort(); // Cancel pending requests
     };
-  }, [isStreaming]);
+  }, [isStreaming, streamStartTime]);
 
   // ========== UTILITY FUNCTIONS ==========
-  
+
   /**
    * Calculate Trail Length
    * Uses the Haversine formula to calculate the total distance between trail points
@@ -172,30 +188,30 @@ function Dashboard() {
    */
   const calculateTrailLength = (coords) => {
     if (coords.length < 2) return 0; // Need at least 2 points for a distance
-    
+
     let totalDistance = 0;
-    
+
     // Calculate distance between each consecutive pair of points
     for (let i = 1; i < coords.length; i++) {
       const [lon1, lat1] = coords[i - 1];
       const [lon2, lat2] = coords[i];
-      
+
       // Haversine formula for calculating distance between two GPS coordinates
       const R = 6371e3;                        // Earth's radius in meters
       const φ1 = lat1 * Math.PI / 180;         // Latitude 1 in radians
       const φ2 = lat2 * Math.PI / 180;         // Latitude 2 in radians
       const Δφ = (lat2 - lat1) * Math.PI / 180; // Difference in latitude
       const Δλ = (lon2 - lon1) * Math.PI / 180; // Difference in longitude
-      
+
       // Haversine formula calculation
       const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
-                Math.cos(φ1) * Math.cos(φ2) *
-                Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+        Math.cos(φ1) * Math.cos(φ2) *
+        Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
       const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-      
+
       totalDistance += R * c; // Add segment distance
     }
-    
+
     return (totalDistance / 1000).toFixed(2); // Convert meters to km
   };
 
@@ -208,7 +224,7 @@ function Dashboard() {
    */
   const calculateAreaCovered = (coords) => {
     if (coords.length < 3) return 0; // Need at least 3 points for an area
-    
+
     // Find bounding box
     const lons = coords.map(c => c[0]);
     const lats = coords.map(c => c[1]);
@@ -216,14 +232,14 @@ function Dashboard() {
     const maxLon = Math.max(...lons);
     const minLat = Math.min(...lats);
     const maxLat = Math.max(...lats);
-    
+
     // Calculate width and height in km
     const width = calculateDistance([minLon, minLat], [maxLon, minLat]);
     const height = calculateDistance([minLon, minLat], [minLon, maxLat]);
-    
+
     // Approximate area (this is a simplification)
     const area = (width * height) / 1000000; // Convert m² to km²
-    
+
     return area.toFixed(3);
   };
 
@@ -238,18 +254,18 @@ function Dashboard() {
   const calculateDistance = (coord1, coord2) => {
     const [lon1, lat1] = coord1;
     const [lon2, lat2] = coord2;
-    
+
     const R = 6371e3;
     const φ1 = lat1 * Math.PI / 180;
     const φ2 = lat2 * Math.PI / 180;
     const Δφ = (lat2 - lat1) * Math.PI / 180;
     const Δλ = (lon2 - lon1) * Math.PI / 180;
-    
+
     const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
-              Math.cos(φ1) * Math.cos(φ2) *
-              Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+      Math.cos(φ1) * Math.cos(φ2) *
+      Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    
+
     return R * c;
   };
 
@@ -268,21 +284,22 @@ function Dashboard() {
   };
 
   // ========== EVENT HANDLERS ==========
-  
+
   /**
    * Handle Start Stream
    * Initiates the video stream and resets all trail data
    */
   const handleStartStream = useCallback(() => {
     if (backendStatus !== 'online') return;
-    
+
     setIsLoading(true);
     setError(null);
     setIsStreaming(true);             // Enable streaming
     setStreamStartTime(Date.now());   // Record start time
     setTrailCoordinates([]);          // Clear previous trail data
+    setLandslideData(null);           // Clear previous landslide data
     setStats({ pointsDetected: 0, trailLength: 0, lastUpdate: null, avgSpeed: 0, areaCovered: 0, streamDuration: 0 }); // Reset statistics
-    
+
     // Clear loading state after a short delay
     setTimeout(() => setIsLoading(false), 1000);
   }, [backendStatus]);
@@ -303,7 +320,7 @@ function Dashboard() {
    */
   const handleResetMap = useCallback(async () => {
     if (backendStatus !== 'online') return;
-    
+
     // Confirm if there's data to lose
     if (trailCoordinates.length > 0) {
       const confirmed = window.confirm(
@@ -311,27 +328,28 @@ function Dashboard() {
       );
       if (!confirmed) return;
     }
-    
+
     setIsLoading(true);
     setError(null);
-    
+
     try {
       // Reset backend to default Langtang Valley coordinates
       const response = await fetch(`${API_BASE}/set_base_location`, {
         method: 'POST',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json'
         },
         body: JSON.stringify({ lat: 28.2134, lon: 85.4293 })
       });
-      
+
       if (!response.ok) {
         throw new Error('Failed to reset map on backend');
       }
-      
+
       // Clear frontend trail data and statistics
       setTrailCoordinates([]);
+      setLandslideData(null);
       setStreamStartTime(null);
       setStats({ pointsDetected: 0, trailLength: 0, lastUpdate: null, avgSpeed: 0, areaCovered: 0, streamDuration: 0 });
     } catch (error) {
@@ -343,7 +361,7 @@ function Dashboard() {
   }, [backendStatus, trailCoordinates.length]);
 
   // ========== KEYBOARD SHORTCUTS ==========
-  
+
   /**
    * Effect: Keyboard Shortcuts
    * Space: Toggle stream, Ctrl+R: Reset map
@@ -352,7 +370,7 @@ function Dashboard() {
     const handleKeyPress = (e) => {
       // Ignore if user is typing in an input
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-      
+
       if (e.code === 'Space' && backendStatus === 'online') {
         e.preventDefault();
         if (isStreaming) {
@@ -365,13 +383,13 @@ function Dashboard() {
         handleResetMap();
       }
     };
-    
+
     window.addEventListener('keydown', handleKeyPress);
     return () => window.removeEventListener('keydown', handleKeyPress);
   }, [isStreaming, backendStatus, handleStartStream, handleStopStream, handleResetMap]);
 
   // ========== RENDER ==========
-  
+
   return (
     <div className="dashboard">
       {/* ==================== DASHBOARD HEADER ==================== */}
@@ -380,7 +398,7 @@ function Dashboard() {
           <h1 className="dashboard-title">Control Center</h1>
           <p className="dashboard-subtitle">Monitor and control drone trail detection</p>
         </div>
-        
+
         {/* Backend Status Indicator */}
         <div className={`status-indicator ${backendStatus}`}>
           <div className="status-dot"></div>
@@ -416,9 +434,9 @@ function Dashboard() {
             <div className="video-container">
               {isStreaming ? (
                 /* Video stream from backend */
-                <img 
-                  src={`${API_BASE}/stream`} 
-                  alt="Live drone video stream showing trail detection" 
+                <img
+                  src={`${API_BASE}/stream`}
+                  alt="Live drone video stream showing trail detection"
                   className="video-stream"
                   loading="lazy"
                 />
@@ -436,8 +454,8 @@ function Dashboard() {
             <div className="controls">
               {/* Start/Stop Detection Button */}
               {!isStreaming ? (
-                <button 
-                  className="button button-primary" 
+                <button
+                  className="button button-primary"
                   onClick={handleStartStream}
                   disabled={backendStatus !== 'online' || isLoading}
                   title="Start video stream and trail detection (Space)"
@@ -446,8 +464,8 @@ function Dashboard() {
                   <span><FaPlay /> {isLoading ? 'Starting...' : 'Start Detection'}</span>
                 </button>
               ) : (
-                <button 
-                  className="button button-danger" 
+                <button
+                  className="button button-danger"
                   onClick={handleStopStream}
                   disabled={isLoading}
                   title="Stop video stream (Space)"
@@ -456,10 +474,10 @@ function Dashboard() {
                   <span><FaStop /> Stop Stream</span>
                 </button>
               )}
-              
+
               {/* Reset Button */}
-              <button 
-                className="button button-secondary" 
+              <button
+                className="button button-secondary"
                 onClick={handleResetMap}
                 disabled={backendStatus !== 'online' || isLoading}
                 title="Reset map and clear trail data (Ctrl+R)"
@@ -480,7 +498,7 @@ function Dashboard() {
                 </div>
               </div>
             )}
-            
+
             {error && backendStatus === 'online' && (
               <div className="error-message" role="alert">
                 <span className="error-icon"><FaExclamationTriangle /></span>
@@ -510,7 +528,7 @@ function Dashboard() {
             </div>
 
             {/* Interactive Map Component */}
-            <MapView coordinates={trailCoordinates} />
+            <MapView coordinates={trailCoordinates} landslideData={landslideData} />
           </div>
         </section>
 
@@ -533,7 +551,7 @@ function Dashboard() {
                   <div className="stat-value">{stats.pointsDetected}</div>
                 </div>
               </div>
-              
+
               <div className="stat-card">
                 <div className="stat-icon"><FaRuler /></div>
                 <div className="stat-content">
@@ -541,7 +559,7 @@ function Dashboard() {
                   <div className="stat-value">{stats.trailLength} <span className="stat-unit">km</span></div>
                 </div>
               </div>
-              
+
               <div className="stat-card">
                 <div className="stat-icon"><FaTachometerAlt /></div>
                 <div className="stat-content">
@@ -567,7 +585,7 @@ function Dashboard() {
                   </div>
                 </div>
               </div>
-              
+
               <div className="stat-card">
                 <div className="stat-icon"><FaClock /></div>
                 <div className="stat-content">

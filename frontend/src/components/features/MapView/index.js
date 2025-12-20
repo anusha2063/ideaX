@@ -11,10 +11,11 @@ L.Icon.Default.mergeOptions({
     shadowUrl: require('leaflet/dist/images/marker-shadow.png'),
 });
 
-const MapView = ({ coordinates }) => {
+const MapView = ({ coordinates, landslideData }) => {
     const mapRef = useRef(null);
     const leafletMapRef = useRef(null);
     const trailLayerRef = useRef(null);
+    const landslideLayerRef = useRef(null);
 
     // Initialize map
     useEffect(() => {
@@ -53,11 +54,14 @@ const MapView = ({ coordinates }) => {
         };
     }, []);
 
-    // Update trail on map
+    // Update Trail Line (Blue Dot Pattern)
     useEffect(() => {
         if (!leafletMapRef.current || !coordinates || coordinates.length === 0) {
             // Remove existing trail layer if no coordinates
             if (trailLayerRef.current) {
+                if (trailLayerRef.current.animationInterval) {
+                    clearInterval(trailLayerRef.current.animationInterval);
+                }
                 leafletMapRef.current.removeLayer(trailLayerRef.current);
                 trailLayerRef.current = null;
             }
@@ -66,50 +70,36 @@ const MapView = ({ coordinates }) => {
 
         // Remove existing trail layer
         if (trailLayerRef.current) {
+            if (trailLayerRef.current.animationInterval) {
+                clearInterval(trailLayerRef.current.animationInterval);
+            }
             leafletMapRef.current.removeLayer(trailLayerRef.current);
         }
 
         // Convert coordinates from [lon, lat] to [lat, lon] for Leaflet
         const latLngs = coordinates.map(coord => [coord[1], coord[0]]);
 
-        // Create glow effect with wider polyline underneath (multiple layers)
-        const glowLine1 = L.polyline(latLngs, {
-            color: 'hsl(160, 45%, 45%)', // Teal
-            weight: 12,
-            opacity: 0.15,
-            lineJoin: 'round',
-            lineCap: 'round',
-        });
-
-        const glowLine2 = L.polyline(latLngs, {
-            color: 'hsl(45, 85%, 62%)', // Amber
-            weight: 8,
-            opacity: 0.25,
-            lineJoin: 'round',
-            lineCap: 'round',
-        });
-
-        // Create main trail line
+        // Blue dotted line for trail center
         const trailLine = L.polyline(latLngs, {
-            color: 'hsl(160, 45%, 55%)', // Bright teal
+            color: '#007bff',     // Bright Blue
             weight: 4,
-            opacity: 0.95,
+            opacity: 1.0,
             lineJoin: 'round',
             lineCap: 'round',
-            dashArray: '12, 6',
-            className: 'trail-line',
-            dashOffset: 0
+            dashArray: '1, 8',    // Distinct dot pattern
         });
 
-        // Animate dash offset for flowing effect
-        let offset = 0;
-        setInterval(() => {
-            offset -= 1;
-            trailLine.setStyle({ dashOffset: offset });
-        }, 50);
+        // Add a glow/surround for visibility
+        const trailGlow = L.polyline(latLngs, {
+            color: '#4fc3f7',     // Light Blue Glow
+            weight: 8,
+            opacity: 0.3,
+            lineJoin: 'round',
+            lineCap: 'round',
+        });
 
         // Create layer group with all glow layers
-        const trailGroup = L.layerGroup([glowLine1, glowLine2, trailLine]);
+        const trailGroup = L.layerGroup([trailGlow, trailLine]);
         trailGroup.addTo(leafletMapRef.current);
         trailLayerRef.current = trailGroup;
 
@@ -118,39 +108,34 @@ const MapView = ({ coordinates }) => {
             // Calculate trail distance
             let totalDistance = 0;
             for (let i = 1; i < latLngs.length; i++) {
-                totalDistance += leafletMapRef.current.distance(latLngs[i-1], latLngs[i]);
+                totalDistance += leafletMapRef.current.distance(latLngs[i - 1], latLngs[i]);
             }
             const distanceKm = (totalDistance / 1000).toFixed(2);
 
-            // Start marker with enhanced styling
-            const startMarker = L.marker(latLngs[0], {
-                icon: L.divIcon({
-                    className: 'custom-marker start-marker',
-                    html: `<div class="marker-pin" style="color: hsl(28, 70%, 55%);">🚁</div>`,
-                    iconSize: [50, 50],
-                    iconAnchor: [25, 50]
-                })
-            }).bindPopup(`
-                <div style="padding: 8px; text-align: center;">
-                    <strong style="color: hsl(28, 70%, 55%); font-size: 1.1em;">🚁 Trail Start</strong><br/>
-                    <span style="font-size: 0.9em; opacity: 0.8;">Coordinates: ${latLngs[0][0].toFixed(5)}, ${latLngs[0][1].toFixed(5)}</span>
-                </div>
-            `);
+            // Start marker - Simple Dot (Green)
+            const startMarker = L.circleMarker(latLngs[0], {
+                radius: 6,
+                fillColor: 'hsl(160, 85%, 45%)', // Bright Green
+                color: '#fff',
+                weight: 2,
+                opacity: 1,
+                fillOpacity: 1
+            }).bindPopup("Start");
             startMarker.addTo(trailGroup);
 
-            // End marker (current position) with enhanced styling
-            const endMarker = L.marker(latLngs[latLngs.length - 1], {
-                icon: L.divIcon({
-                    className: 'custom-marker end-marker',
-                    html: `<div class="marker-pin pulse-marker" style="color: hsl(160, 45%, 55%);">📍</div>`,
-                    iconSize: [50, 50],
-                    iconAnchor: [25, 50]
-                })
+            // End marker - Simple Dot (Red)
+            const endMarker = L.circleMarker(latLngs[latLngs.length - 1], {
+                radius: 8,
+                fillColor: '#ff3333', // Red
+                color: '#fff',
+                weight: 2,
+                opacity: 1,
+                fillOpacity: 1,
+                className: 'pulse-marker-circle'
             }).bindPopup(`
                 <div style="padding: 8px; text-align: center;">
-                    <strong style="color: hsl(160, 45%, 55%); font-size: 1.1em;">📍 Current Position</strong><br/>
-                    <span style="font-size: 0.9em; opacity: 0.8;">Coordinates: ${latLngs[latLngs.length - 1][0].toFixed(5)}, ${latLngs[latLngs.length - 1][1].toFixed(5)}</span><br/>
-                    <span style="font-size: 0.9em; color: hsl(45, 85%, 62%); font-weight: 600;">Distance: ${distanceKm} km</span>
+                    <strong>Current Position</strong><br/>
+                    <span style="font-size: 0.9em; opacity: 0.8;">${distanceKm} km</span>
                 </div>
             `);
             endMarker.addTo(trailGroup);
@@ -158,9 +143,9 @@ const MapView = ({ coordinates }) => {
             // Add distance waypoint markers every km
             let accumulatedDistance = 0;
             for (let i = 1; i < latLngs.length; i++) {
-                const segmentDistance = leafletMapRef.current.distance(latLngs[i-1], latLngs[i]);
+                const segmentDistance = leafletMapRef.current.distance(latLngs[i - 1], latLngs[i]);
                 accumulatedDistance += segmentDistance;
-                
+
                 if (Math.floor(accumulatedDistance / 1000) > Math.floor((accumulatedDistance - segmentDistance) / 1000)) {
                     const kmMark = Math.floor(accumulatedDistance / 1000);
                     L.circleMarker(latLngs[i], {

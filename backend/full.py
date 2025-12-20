@@ -10,11 +10,12 @@ app = Flask(__name__)
 CORS(app)
 
 # -------------------- GLOBAL STATE --------------------
-# Langtang Valley, Nepal
 BASE_LAT = 28.2134
 BASE_LON = 85.4293
 
-trail_geo_points = []   # [lon, lat]
+trail_points = []        # LineString
+landslide_polygon = []   # Polygon (single)
+
 frame_index = 0
 
 # -------------------- LOAD MODEL --------------------
@@ -22,7 +23,6 @@ model = YOLO("best.pt")
 
 # -------------------- GPS SIMULATION --------------------
 def simulate_gps(frame_idx):
-    # VERY slow movement (realistic)
     lat = BASE_LAT + frame_idx * 0.0000002
     lon = BASE_LON + frame_idx * 0.0000002
     return lat, lon
@@ -37,16 +37,34 @@ def pixel_to_geo(px, py, w, h, lat, lon, meters_per_pixel=0.2):
 
     return new_lat, new_lon
 
-# -------------------- VIDEO + YOLO PIPELINE --------------------
+# -------------------- MASK → POLYGON --------------------
+def mask_to_polygon(mask, w, h, lat, lon):
+    contours, _ = cv2.findContours(
+        mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
+
+    if not contours:
+        return []
+
+    largest = max(contours, key=cv2.contourArea)
+
+    geo_polygon = []
+    for point in largest:
+        x, y = point[0]
+        glat, glon = pixel_to_geo(x, y, w, h, lat, lon)
+        geo_polygon.append([glon, glat])
+
+    # Close polygon
+    if geo_polygon[0] != geo_polygon[-1]:
+        geo_polygon.append(geo_polygon[0])
+
+    return geo_polygon
+
+# -------------------- VIDEO + YOLO --------------------
 def detect_and_stream():
-    global frame_index, trail_geo_points
+    global frame_index, trail_points, landslide_polygon
 
     cap = cv2.VideoCapture("video.mp4")
-
-    if not cap.isOpened():
-        print("ERROR: Could not open video.mp4")
-        return
-
     fps = cap.get(cv2.CAP_PROP_FPS)
     delay = 1 / fps if fps > 0 else 0.03
 
@@ -73,7 +91,7 @@ def detect_and_stream():
 
             ys, xs = np.where(mask_resized > 0.5)
 
-            # ---- USE CENTROID ONLY (KEY FIX) ----
+            # -------- TRAIL (CENTROID) --------
             if len(xs) > 0:
                 cx = int(xs.mean())
                 cy = int(ys.mean())
@@ -86,26 +104,34 @@ def detect_and_stream():
                     gps_lon
                 )
 
-                trail_geo_points.append([lon, lat])
+                trail_points.append([lon, lat])
+                trail_points[:] = trail_points[-1000:]
 
-                # limit trail size (performance)
-                if len(trail_geo_points) > 1000:
-                    trail_geo_points = trail_geo_points[-1000:]
+            # -------- LANDSLIDE POLYGON --------
+            landslide_polygon = mask_to_polygon(
+                mask_resized,
+                frame.shape[1],
+                frame.shape[0],
+                gps_lat,
+                gps_lon
+            )
 
-            # ---- GREEN OVERLAY ----
+            # -------- VIDEO OVERLAY --------
             overlay = frame.copy()
             overlay[mask_resized > 0.5] = (0, 255, 0)
             frame = cv2.addWeighted(frame, 0.7, overlay, 0.3, 0)
 
         time.sleep(delay)
 
-        ret, buffer = cv2.imencode(".jpg", frame)
-        frame_bytes = buffer.tobytes()
+        # Optimize stream: Resize for faster transmission
+        frame = cv2.resize(frame, (640, 360)) 
 
+        # Encode with lower quality for speed
+        ret, buffer = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
         yield (
             b"--frame\r\n"
             b"Content-Type: image/jpeg\r\n\r\n" +
-            frame_bytes +
+            buffer.tobytes() +
             b"\r\n"
         )
 
@@ -116,6 +142,24 @@ def detect_and_stream():
 @app.route("/")
 def home():
     return jsonify({"status": "SkyWeave backend running"})
+
+@app.route("/set_base_location", methods=["POST"])
+def set_base_location():
+    global BASE_LAT, BASE_LON, trail_points, landslide_polygon, frame_index
+
+    data = request.json
+    BASE_LAT = data["lat"]
+    BASE_LON = data["lon"]
+
+    trail_points = []
+    landslide_polygon = []
+    frame_index = 0
+
+    return jsonify({
+        "status": "Base location set",
+        "lat": BASE_LAT,
+        "lon": BASE_LON
+    })
 
 @app.route("/stream")
 def stream():
@@ -128,28 +172,23 @@ def stream():
 def trail_geojson():
     return jsonify({
         "type": "Feature",
-        "properties": {},
         "geometry": {
             "type": "LineString",
-            "coordinates": trail_geo_points
+            "coordinates": trail_points
         }
     })
 
-@app.route("/set_base_location", methods=["POST"])
-def set_base_location():
-    global BASE_LAT, BASE_LON, trail_geo_points, frame_index
-
-    data = request.json
-    BASE_LAT = data["lat"]
-    BASE_LON = data["lon"]
-
-    trail_geo_points = []
-    frame_index = 0
+@app.route("/landslide/geojson")
+def landslide_geojson():
+    if not landslide_polygon:
+        return jsonify({"type": "FeatureCollection", "features": []})
 
     return jsonify({
-        "status": "Base location set",
-        "lat": BASE_LAT,
-        "lon": BASE_LON
+        "type": "Feature",
+        "geometry": {
+            "type": "Polygon",
+            "coordinates": [landslide_polygon]
+        }
     })
 
 # -------------------- RUN --------------------
