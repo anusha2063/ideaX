@@ -224,7 +224,7 @@ const MapView = ({ coordinates, landslideData }) => {
                     <div className="map-placeholder">
                         <span className="map-placeholder-icon">📍</span>
                         <p>Waiting for detection...</p>
-                        <small>Select mode and Start Detection</small>
+                        <small>Click Start Detection to begin</small>
                     </div>
                 </div>
             )}

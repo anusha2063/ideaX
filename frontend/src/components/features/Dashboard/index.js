@@ -11,14 +11,13 @@ const API_BASE = 'http://localhost:5000';
 
 /**
  * Dashboard Component
- * Main application dashboard that manages drone trail and landslide detection
+ * Main application dashboard that manages combined drone trail and landslide detection
  */
 function Dashboard() {
   // ========== STATE MANAGEMENT ==========
 
   // Streaming state
   const [isStreaming, setIsStreaming] = useState(false);           // Whether video stream is active
-  const [detectionMode, setDetectionMode] = useState('trail');     // 'trail' | 'landslide'
 
   // Backend connection state
   const [backendStatus, setBackendStatus] = useState('checking');  // 'checking' | 'online' | 'offline'
@@ -27,15 +26,15 @@ function Dashboard() {
   const [trailCoordinates, setTrailCoordinates] = useState([]);    // Array of [lon, lat] coordinates
 
   // Landslide/Segmentation data state
-  const [landslideData, setLandslideData] = useState(null);
+  const [landslideData, setLandslideData] = useState([]);          // Array of polygons
 
   // Statistics state
   const [stats, setStats] = useState({
-    pointsDetected: 0,        // Number of trail points detected
+    trailPoints: 0,           // Number of trail points
+    landslideCount: 0,        // Number of landslide polygons
     trailLength: 0,           // Total trail length in km
     lastUpdate: null,         // Timestamp of last data update
     avgSpeed: 0,              // Average speed in km/h
-    areaCovered: 0,           // Approximate area covered in km²
     streamDuration: 0         // Streaming duration in seconds
   });
 
@@ -87,7 +86,7 @@ function Dashboard() {
   }, []);
 
   /**
-   * Effect: Poll Data based on Mode
+   * Effect: Poll Data (Combined)
    */
   useEffect(() => {
     if (!isStreaming) return;
@@ -96,51 +95,41 @@ function Dashboard() {
 
     const pollData = async () => {
       try {
-        // Poll based on active mode
-        if (detectionMode === 'trail') {
-          const response = await fetch(`${API_BASE}/trail/geojson`, {
-            signal: abortController.signal,
-            headers: { 'Accept': 'application/json' }
-          });
+        // Fetch BOTH endpoints in parallel
+        const [trailRes, landslideRes] = await Promise.all([
+          fetch(`${API_BASE}/trail/geojson`, { signal: abortController.signal }),
+          fetch(`${API_BASE}/landslide/geojson`, { signal: abortController.signal })
+        ]);
 
-          if (response.ok) {
-            const data = await response.json();
-            if (data.geometry && Array.isArray(data.geometry.coordinates)) {
-              // Filter valid coordinates
-              const validCoords = data.geometry.coordinates.filter(coord =>
-                Array.isArray(coord) && coord.length === 2 && !isNaN(coord[0]) && !isNaN(coord[1])
-              );
+        let newTrailCoords = [];
+        let newLandslidePolys = [];
 
-              setTrailCoordinates(validCoords);
-              setLandslideData(null); // Clear landslide data in trail mode
-
-              updateStats(validCoords, 0);
-            }
-          }
-        } else if (detectionMode === 'landslide') {
-          const response = await fetch(`${API_BASE}/landslide/geojson`, {
-            signal: abortController.signal,
-            headers: { 'Accept': 'application/json' }
-          });
-
-          if (response.ok) {
-            const data = await response.json();
-            // Handle FeatureCollection or Feature
-            let polygons = [];
-            if (data.type === 'FeatureCollection') {
-              polygons = data.features.map(f => f.geometry.coordinates[0]); // Extract polygon rings
-            } else if (data.geometry) {
-              polygons = data.geometry.coordinates; // Single Polygon
-            }
-
-            setLandslideData(polygons); // Pass raw coordinates or structured data as expected by MapView
-            setTrailCoordinates([]); // Clear trail data in landslide mode
-
-            // For stats, we might calculate area
-            updateStats([], polygons.length); // Adjusted stats update
+        // Process Trail Data
+        if (trailRes.ok) {
+          const data = await trailRes.json();
+          if (data.geometry && Array.isArray(data.geometry.coordinates)) {
+            newTrailCoords = data.geometry.coordinates.filter(coord =>
+              Array.isArray(coord) && coord.length === 2 && !isNaN(coord[0]) && !isNaN(coord[1])
+            );
           }
         }
 
+        // Process Landslide Data
+        if (landslideRes.ok) {
+          const data = await landslideRes.json();
+          if (data.type === 'FeatureCollection') {
+            newLandslidePolys = data.features.map(f => f.geometry.coordinates[0]);
+          } else if (data.geometry) {
+            newLandslidePolys = [data.geometry.coordinates]; // Should technically be list of polys
+          }
+        }
+
+        // Update State
+        setTrailCoordinates(newTrailCoords);
+        setLandslideData(newLandslidePolys);
+
+        // Update Statistics
+        updateStats(newTrailCoords, newLandslidePolys);
         setError(null);
 
       } catch (error) {
@@ -156,20 +145,20 @@ function Dashboard() {
       clearInterval(interval);
       abortController.abort();
     };
-  }, [isStreaming, detectionMode, streamStartTime]);
+  }, [isStreaming, streamStartTime]);
 
   // ========== HELPER FUNCTIONS ==========
 
-  const updateStats = (coords, landslideCount) => {
+  const updateStats = (coords, polygons) => {
     const duration = streamStartTime ? Math.floor((Date.now() - streamStartTime) / 1000) : 0;
     const trailLength = calculateTrailLength(coords);
 
     setStats({
-      pointsDetected: detectionMode === 'trail' ? coords.length : landslideCount,
+      trailPoints: coords.length,
+      landslideCount: polygons.length,
       trailLength: trailLength,
       lastUpdate: new Date().toLocaleTimeString(),
       avgSpeed: duration > 0 ? ((trailLength / duration) * 3600).toFixed(1) : 0,
-      areaCovered: calculateAreaCovered(coords), // Can be updated for landslide area later
       streamDuration: duration
     });
   };
@@ -181,22 +170,6 @@ function Dashboard() {
       totalDistance += calculateDistance(coords[i - 1], coords[i]);
     }
     return (totalDistance / 1000).toFixed(2);
-  };
-
-  const calculateAreaCovered = (coords) => {
-    if (!coords || coords.length < 3) return 0;
-    // Simple bounding box area
-    const lons = coords.map(c => c[0]);
-    const lats = coords.map(c => c[1]);
-    const minLon = Math.min(...lons);
-    const maxLon = Math.max(...lons);
-    const minLat = Math.min(...lats);
-    const maxLat = Math.max(...lats);
-
-    const width = calculateDistance([minLon, minLat], [maxLon, minLat]);
-    const height = calculateDistance([minLon, minLat], [minLon, maxLat]);
-
-    return ((width * height) / 1000000).toFixed(3);
   };
 
   const calculateDistance = (coord1, coord2) => {
@@ -234,8 +207,8 @@ function Dashboard() {
 
     // Reset data on start
     setTrailCoordinates([]);
-    setLandslideData(null);
-    setStats({ pointsDetected: 0, trailLength: 0, lastUpdate: null, avgSpeed: 0, areaCovered: 0, streamDuration: 0 });
+    setLandslideData([]);
+    setStats({ trailPoints: 0, landslideCount: 0, trailLength: 0, lastUpdate: null, avgSpeed: 0, streamDuration: 0 });
 
     setTimeout(() => setIsLoading(false), 1000);
   }, [backendStatus]);
@@ -262,9 +235,9 @@ function Dashboard() {
       });
 
       setTrailCoordinates([]);
-      setLandslideData(null);
+      setLandslideData([]);
       setStreamStartTime(null);
-      setStats({ pointsDetected: 0, trailLength: 0, lastUpdate: null, avgSpeed: 0, areaCovered: 0, streamDuration: 0 });
+      setStats({ trailPoints: 0, landslideCount: 0, trailLength: 0, lastUpdate: null, avgSpeed: 0, streamDuration: 0 });
     } catch (error) {
       console.error('Failed to reset:', error);
       setError('Failed to reset map. Please try again.');
@@ -272,15 +245,6 @@ function Dashboard() {
       setIsLoading(false);
     }
   }, [backendStatus]);
-
-  const toggleMode = (mode) => {
-    if (isStreaming) {
-      handleStopStream(); // Stop stream before switching to avoid mixed data
-    }
-    setDetectionMode(mode);
-    setTrailCoordinates([]);
-    setLandslideData(null);
-  };
 
   // ========== RENDER ==========
 
@@ -290,7 +254,7 @@ function Dashboard() {
       <div className="dashboard-header">
         <div className="dashboard-title-section">
           <h1 className="dashboard-title">Control Center</h1>
-          <p className="dashboard-subtitle">Monitor and control drone detection systems</p>
+          <p className="dashboard-subtitle">Combined Drone Trail & Landslide Detection</p>
         </div>
 
         {/* Backend Status Indicator */}
@@ -324,28 +288,12 @@ function Dashboard() {
               )}
             </div>
 
-            {/* Mode Selection */}
-            <div className="mode-selector">
-              <button
-                className={`mode-btn ${detectionMode === 'trail' ? 'active' : ''}`}
-                onClick={() => toggleMode('trail')}
-              >
-                <FaRoute /> Trail Detection
-              </button>
-              <button
-                className={`mode-btn ${detectionMode === 'landslide' ? 'active' : ''}`}
-                onClick={() => toggleMode('landslide')}
-              >
-                <FaMountain /> Landslide Segmentation
-              </button>
-            </div>
-
             {/* Video Stream Container */}
             <div className="video-container">
               {isStreaming ? (
-                /* Video stream from backend with mode param */
+                /* Video stream from backend */
                 <img
-                  src={`${API_BASE}/stream?mode=${detectionMode}`}
+                  src={`${API_BASE}/stream`}
                   alt="Live drone video stream"
                   className="video-stream"
                   loading="lazy"
@@ -355,7 +303,7 @@ function Dashboard() {
                 <div className="video-placeholder">
                   <span className="placeholder-icon"><FaCamera /></span>
                   <p>Stream not active</p>
-                  <small>Select mode and click "Start Detection"</small>
+                  <small>Click "Start Detection" to begin</small>
                 </div>
               )}
             </div>
@@ -412,7 +360,7 @@ function Dashboard() {
             <div className="card-header">
               <h2 className="card-title">
                 <span className="card-icon"><FaMap /></span>
-                {detectionMode === 'trail' ? 'Trail Map' : 'Landslide Map'}
+                Trail & Landslide Map
               </h2>
               {/* Updating indicator (shown when streaming) */}
               {isStreaming && (
@@ -435,7 +383,7 @@ function Dashboard() {
             <div className="card-header">
               <h2 className="card-title">
                 <span className="card-icon"><FaChartLine /></span>
-                Statistics ({detectionMode === 'trail' ? 'Trail' : 'Landslide'})
+                Real-time Statistics
               </h2>
             </div>
 
@@ -443,19 +391,23 @@ function Dashboard() {
               <div className="stat-card">
                 <div className="stat-icon"><FaMapMarkerAlt /></div>
                 <div className="stat-content">
-                  <div className="stat-label">
-                    {detectionMode === 'trail' ? 'Points Detected' : 'Polygons Detected'}
-                  </div>
-                  <div className="stat-value">{stats.pointsDetected}</div>
+                  <div className="stat-label">Trail Points</div>
+                  <div className="stat-value">{stats.trailPoints}</div>
+                </div>
+              </div>
+
+              <div className="stat-card">
+                <div className="stat-icon"><FaMountain /></div>
+                <div className="stat-content">
+                  <div className="stat-label">Landslides</div>
+                  <div className="stat-value">{stats.landslideCount}</div>
                 </div>
               </div>
 
               <div className="stat-card">
                 <div className="stat-icon"><FaRuler /></div>
                 <div className="stat-content">
-                  <div className="stat-label">
-                    {detectionMode === 'trail' ? 'Trail Length' : 'Perimeter'}
-                  </div>
+                  <div className="stat-label">Trail Length</div>
                   <div className="stat-value">{stats.trailLength} <span className="stat-unit">km</span></div>
                 </div>
               </div>
@@ -465,14 +417,6 @@ function Dashboard() {
                 <div className="stat-content">
                   <div className="stat-label">Avg Speed</div>
                   <div className="stat-value">{stats.avgSpeed} <span className="stat-unit">km/h</span></div>
-                </div>
-              </div>
-
-              <div className="stat-card">
-                <div className="stat-icon"><FaExpand /></div>
-                <div className="stat-content">
-                  <div className="stat-label">Area Covered</div>
-                  <div className="stat-value">{stats.areaCovered} <span className="stat-unit">km²</span></div>
                 </div>
               </div>
 

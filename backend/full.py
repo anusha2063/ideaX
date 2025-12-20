@@ -10,7 +10,6 @@ app = Flask(__name__)
 CORS(app)
 
 # -------------------- LOAD MODELS --------------------
-# Load both models at startup
 print("Loading Trail Model...")
 trail_model = YOLO("best.pt")
 print("Loading Landslide Model...")
@@ -72,7 +71,7 @@ def mask_to_polygons(mask, w, h, lat, lon):
 
 # -------------------- VIDEO HELPER --------------------
 def buffer_frame(frame):
-     # Encode with lower quality for speed
+    # Encode with lower quality for speed
     frame_resized = cv2.resize(frame, (640, 360))
     ret, buffer = cv2.imencode(".jpg", frame_resized, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
     return (
@@ -83,74 +82,108 @@ def buffer_frame(frame):
     )
 
 # -------------------- STREAM GENERATOR --------------------
-def generate_stream(mode="trail"):
+def generate_stream():
     global frame_index, trail_points, landslide_polygons
 
-    # Select Video Source and Model based on Mode
-    if mode == "landslide":
-        video_path = "landslide.mp4"
-        model = landslide_model
-    else:
-        video_path = "video.mp4"
-        model = trail_model
-    
+    # Always use landslide.mp4 for combined detection
+    video_path = "video.mp4"
     cap = cv2.VideoCapture(video_path)
+    
+    # Check if video opened successfully
+    if not cap.isOpened():
+        print(f"Error: Could not open {video_path}")
+        return
+
     fps = cap.get(cv2.CAP_PROP_FPS)
     delay = 1 / fps if fps > 0 else 0.03
+    
+    local_frame_count = 0
 
     while True:
         success, frame = cap.read()
         if not success:
             cap.set(cv2.CAP_PROP_POS_FRAMES, 0) # Loop video
             continue
-
+        
+        local_frame_count += 1
         frame_index += 1
         gps_lat, gps_lon = simulate_gps(frame_index)
 
-        # Run Inference
-        results = model(frame, conf=0.5, verbose=False)
-        r = results[0]
+        # ----------------- TRAIL DETECTION -----------------
+        # Lower confidence to catch more of the road
+        trail_results = trail_model(frame, conf=0.25, verbose=False)
+        trail_r = trail_results[0]
+        
+        trail_mask_img = np.zeros(frame.shape[:2], dtype="uint8")
+        has_trail = False
 
-        if r.masks is not None:
-            # Combine all masks for display
-            combined_mask = np.zeros((frame.shape[0], frame.shape[1]), dtype="uint8")
+        if trail_r.masks is not None:
+            # Combine all trail masks (in case road is segmented)
+            for mask_data in trail_r.masks.data:
+                t_mask = mask_data.cpu().numpy()
+                t_mask_resized = cv2.resize(t_mask.astype("uint8"), (frame.shape[1], frame.shape[0]), interpolation=cv2.INTER_NEAREST)
+                trail_mask_img = cv2.bitwise_or(trail_mask_img, t_mask_resized)
             
-            # Process masks
-            if mode == "trail":
-                # Trail Logic: Centroid of the first/largest mask
-                if len(r.masks.data) > 0:
-                    mask = r.masks.data[0].cpu().numpy()
-                    mask_resized = cv2.resize(mask.astype("uint8"), (frame.shape[1], frame.shape[0]), interpolation=cv2.INTER_NEAREST)
-                    combined_mask = mask_resized
-
-                    ys, xs = np.where(mask_resized > 0.5)
-                    if len(xs) > 0:
-                        cx = int(xs.mean())
-                        cy = int(ys.mean())
-                        lat, lon = pixel_to_geo(cx, cy, frame.shape[1], frame.shape[0], gps_lat, gps_lon)
-                        
-                        trail_points.append([lon, lat])
-                        trail_points[:] = trail_points[-1000:] # Keep last 1000
-
-            elif mode == "landslide":
-                # Landslide Logic: Polygons of all masks
-                for mask_data in r.masks.data:
-                    m = mask_data.cpu().numpy()
-                    m_resized = cv2.resize(m.astype("uint8"), (frame.shape[1], frame.shape[0]), interpolation=cv2.INTER_NEAREST)
-                    combined_mask = cv2.bitwise_or(combined_mask, m_resized)
+            # Check if we have any detection after combination
+            if np.any(trail_mask_img):
+                has_trail = True
                 
-                # Update Landslide Polygons
-                current_polygons = mask_to_polygons(combined_mask, frame.shape[1], frame.shape[0], gps_lat, gps_lon)
-                if current_polygons:
-                     # Keep recent polygons logic (e.g. max 50)
-                     landslide_polygons.extend(current_polygons)
-                     landslide_polygons[:] = landslide_polygons[-50:]
+                # Update Trail State (Centroid of combined mask)
+                ys, xs = np.where(trail_mask_img > 0.5)
+                if len(xs) > 0:
+                    cx = int(xs.mean())
+                    cy = int(ys.mean())
+                    lat, lon = pixel_to_geo(cx, cy, frame.shape[1], frame.shape[0], gps_lat, gps_lon)
+                    trail_points.append([lon, lat])
+                    trail_points[:] = trail_points[-1500:] # Keep last 1500 history
 
-            # Visual Overlay
-            overlay = frame.copy()
-            color = (0, 255, 255) if mode == "trail" else (0, 0, 255) # Yellow vs Red
-            overlay[combined_mask > 0.5] = color
-            frame = cv2.addWeighted(frame, 0.7, overlay, 0.3, 0)
+        # ----------------- LANDSLIDE DETECTION -----------------
+        landslide_results = landslide_model(frame, conf=0.5, verbose=False)
+        landslide_r = landslide_results[0]
+
+        landslide_mask_img = np.zeros(frame.shape[:2], dtype="uint8")
+        has_landslide = False
+
+        if landslide_r.masks is not None:
+            # Combine all landslide masks
+            for mask_data in landslide_r.masks.data:
+                lm = mask_data.cpu().numpy()
+                lm_resized = cv2.resize(lm.astype("uint8"), (frame.shape[1], frame.shape[0]), interpolation=cv2.INTER_NEAREST)
+                landslide_mask_img = cv2.bitwise_or(landslide_mask_img, lm_resized)
+            
+            if np.any(landslide_mask_img):
+                has_landslide = True
+
+                # Update Landslide State
+                current_polygons = mask_to_polygons(landslide_mask_img, frame.shape[1], frame.shape[0], gps_lat, gps_lon)
+                landslide_polygons = current_polygons # Update to current frame's detections
+
+        # Debug Print
+        if local_frame_count % 30 == 0:
+            print(f"Frame {local_frame_count}: Trail={has_trail}, Landslide={has_landslide}")
+
+        # ----------------- VISUALIZATION -----------------
+        overlay = frame.copy()
+        
+        # Draw Landslide (Red)
+        if has_landslide:
+            overlay[landslide_mask_img > 0.5] = (0, 0, 255)
+
+        # Draw Trail (Yellow)
+        if has_trail:
+            overlay[trail_mask_img > 0.5] = (0, 255, 255)
+
+        # Blend
+        if has_trail or has_landslide:
+            mask_combined = cv2.bitwise_or(trail_mask_img, landslide_mask_img)
+            alpha = 0.6
+            try:
+                # Ensure mask is boolean or uint8 for indexing
+                mask_bool = mask_combined > 0.5
+                if np.any(mask_bool):
+                    frame[mask_bool] = cv2.addWeighted(frame, 1-alpha, overlay, alpha, 0)[mask_bool]
+            except Exception as e:
+                print(f"Error blending: {e}")
 
         time.sleep(delay)
         yield buffer_frame(frame)
@@ -184,9 +217,10 @@ def set_base_location():
 @app.route("/stream")
 def stream():
     # Helper to check query param, defaulting to trail
-    mode = request.args.get('mode', 'trail')
+    # mode = request.args.get('mode', 'trail') 
+    # Ignore mode, we do BOTH now
     return Response(
-        generate_stream(mode),
+        generate_stream(),
         mimetype="multipart/x-mixed-replace; boundary=frame"
     )
 
@@ -203,7 +237,6 @@ def trail_geojson():
 @app.route("/landslide/geojson")
 def landslide_geojson():
     if not landslide_polygons:
-         # Empty feature collection
         return jsonify({"type": "FeatureCollection", "features": []})
 
     features = []
