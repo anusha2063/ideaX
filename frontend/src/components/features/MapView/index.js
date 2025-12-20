@@ -171,15 +171,60 @@ const MapView = ({ coordinates, landslideData }) => {
         }
     }, [coordinates]);
 
+    // Update Landslide Layer
+    useEffect(() => {
+        if (!leafletMapRef.current) return;
+
+        // Clear existing layer
+        if (landslideLayerRef.current) {
+            leafletMapRef.current.removeLayer(landslideLayerRef.current);
+            landslideLayerRef.current = null;
+        }
+
+        if (!landslideData || landslideData.length === 0) return;
+
+        const landslideGroup = L.layerGroup();
+
+        landslideData.forEach(polygon => {
+            // polygon is array of [lon, lat], convert to [lat, lon]
+            const latLngs = polygon.map(coord => [coord[1], coord[0]]);
+
+            L.polygon(latLngs, {
+                color: '#e74c3c',         // Red
+                weight: 2,
+                opacity: 1,
+                fillColor: '#e74c3c',
+                fillOpacity: 0.35,
+                dashArray: '5, 5',
+                lineJoin: 'round'
+            }).bindPopup("Detected Landslide Zone").addTo(landslideGroup);
+        });
+
+        landslideGroup.addTo(leafletMapRef.current);
+        landslideLayerRef.current = landslideGroup;
+
+        // Fit bounds if we have data AND trail coordinates are empty (priority to trail if both present)
+        if (coordinates.length === 0 && landslideData.length > 0) {
+            const allPoints = [];
+            landslideData.forEach(poly => {
+                poly.forEach(pt => allPoints.push([pt[1], pt[0]]));
+            });
+            if (allPoints.length > 0) {
+                const bounds = L.latLngBounds(allPoints);
+                leafletMapRef.current.fitBounds(bounds, { padding: [50, 50] });
+            }
+        }
+    }, [landslideData, coordinates.length]);
+
     return (
         <div className="map-view-container">
             <div ref={mapRef} className="leaflet-map" />
-            {coordinates.length === 0 && (
+            {coordinates.length === 0 && (!landslideData || landslideData.length === 0) && (
                 <div className="map-overlay">
                     <div className="map-placeholder">
                         <span className="map-placeholder-icon">📍</span>
-                        <p>Waiting for trail detection...</p>
-                        <small>Start the stream to see detected trails</small>
+                        <p>Waiting for detection...</p>
+                        <small>Select mode and Start Detection</small>
                     </div>
                 </div>
             )}
